@@ -5,12 +5,13 @@ import pandas as pd
 from datetime import datetime
 import numpy as np
 import math
-import random
+import time
+import tqdm
 
 from . import DISCORD_ENDPOINT
 
 
-def discord_message_query(guild_id, query_filters=None, offset=0):
+def discord_message_query(guild_id, query_filters=None, offset=0, is_channel=False):
     if query_filters is None:
         query_filters = []
 
@@ -22,7 +23,8 @@ def discord_message_query(guild_id, query_filters=None, offset=0):
     else:
         query_filters[qoffset_filters[0]].offset += offset
 
-    qstr = '{}/guilds/{}/messages/search?{}'.format(DISCORD_ENDPOINT, guild_id, "&".join(map(str, query_filters)))
+    qstr = ('{}/channels/{}/messages/search?{}' if is_channel else '{}/guilds/{}/messages/search?{}')\
+        .format(DISCORD_ENDPOINT, guild_id, "&".join(map(str, query_filters)))
     if len(qoffset_filters) == 0:
         query_filters.pop(-1)
     return qstr
@@ -36,6 +38,7 @@ class Universe(set):
 class DiscordCustomContext:
     def __init__(self, token):
         self.token = token
+        self.last_res = None
 
     @staticmethod
     def export_by_author(path, query_result, train_test_split,
@@ -51,7 +54,6 @@ class DiscordCustomContext:
             blacklist = set()
 
         author_ids = np.fromiter((x['author']['id'] for x in flattened_query), dtype='S18')
-
         if whitelist is None:
             mask = ~np.isin(author_ids, blacklist)
         else:
@@ -60,26 +62,29 @@ class DiscordCustomContext:
         message_ids = np.array([x['id'] for x in flattened_query], dtype='S18')[mask]
 
         author_ids = author_ids[mask]
-        for x in author_ids.unique():
-            os.makedirs(os.path.join(test_dir, x), exist_ok=True)
-            os.makedirs(os.path.join(train_dir, x), exist_ok=True)
+        for x in np.unique(author_ids):
+            os.makedirs(os.path.join(path, test_dir, x.decode()), exist_ok=True)
+            os.makedirs(os.path.join(path, train_dir, x.decode()), exist_ok=True)
 
         for author_id, message, message_id in zip(author_ids[:int(len(messages) * train_test_split)],
                                                   messages[:int(len(messages) * train_test_split)],
                                                   message_ids[:int(len(messages) * train_test_split)]):
-            with open(os.path.join(train_dir, author_id, message_id) + '.txt') as f:
+            with open(os.path.join(path, train_dir, author_id.decode(), message_id.decode()) + '.txt', 'w',
+                      encoding='utf8') as f:
                 f.write(message)
 
         for author_id, message, message_id in zip(author_ids[int(len(messages) * train_test_split):],
                                                   messages[int(len(messages) * train_test_split):],
                                                   message_ids[int(len(messages) * train_test_split):]):
-            with open(os.path.join(train_dir, author_id, message_id) + '.txt') as f:
+            with open(os.path.join(path, test_dir, author_id.decode(), message_id.decode()) + '.txt', 'w',
+                      encoding='utf8') as f:
                 f.write(message)
 
-    def query_message(self, guild_id, max_messages=math.inf, query_filters=[]):
+    def query_message(self, guild_id, max_messages=math.inf, query_filters=[], is_channel=False):
         total_read = 25
 
-        res = requests.get(discord_message_query(guild_id, query_filters=query_filters, offset=0),
+        res = requests.get(discord_message_query(guild_id, query_filters=query_filters, offset=0,
+                                                 is_channel=is_channel),
                            headers={'Authorization': str(self.token),
                                     'accept': '*/*',
                                     'accept-encoding': 'gzip, deflate, br',
@@ -92,12 +97,15 @@ class DiscordCustomContext:
                                                   'Safari/537.36 ',
                                     },
                            )
-
         json_buf = json.loads(res.content)
         max_messages = min(json_buf['total_results'], max_messages)
+        pbar = tqdm.tqdm(total=max_messages)
+        pbar.set_description("Downloading")
 
         while total_read < max_messages:
-            res = requests.get(discord_message_query(guild_id, query_filters=query_filters, offset=total_read),
+            pbar.update(25)
+            res = requests.get(discord_message_query(guild_id, query_filters=query_filters, offset=total_read,
+                                                     is_channel=is_channel),
                                headers={'Authorization': str(self.token),
                                         'accept': '*/*',
                                         'accept-encoding': 'gzip, deflate, br',
@@ -110,8 +118,18 @@ class DiscordCustomContext:
                                                       'Safari/537.36 ',
                                         },
                                )
+            if res.status_code == 429:
+                retry_after = res.json()['retry_after']
+                for x in tqdm.tqdm(range(int(retry_after * 10)), desc='Rate limited: Waiting:', position=0,
+                                   leave=True):
+                    time.sleep(0.1)
+                pbar.unpause()
+                continue
+
             json_buf['messages'] += json.loads(res.content)['messages']
+
             total_read += 25
+            time.sleep(0.05)
 
         return json_buf
 
