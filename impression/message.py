@@ -11,7 +11,34 @@ import tqdm
 from . import DISCORD_ENDPOINT
 
 
-def discord_message_query(guild_id, query_filters=None, offset=0, is_channel=False):
+def discord_message_query(token, guild_id, query_filters=None, offset=0, is_channel=False):
+    while True:
+        res = requests.get(discord_message_query_str(guild_id, query_filters=query_filters, offset=0,
+                                                     is_channel=is_channel),
+                           headers={'Authorization': str(token),
+                                    'accept': '*/*',
+                                    'accept-encoding': 'gzip, deflate, br',
+                                    'accept-language': 'en-US',
+                                    'sec-fetch-dest': 'empty',
+                                    'sec-fetch-mode': 'cors',
+                                    'sec-fetch-site': 'same-origin',
+                                    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, '
+                                                  'like Gecko) discord/0.0.309 Chrome/83.0.4103.122 Electron/9.3.5 '
+                                                  'Safari/537.36 ',
+                                    },
+                           )
+        if res.status_code == 429:
+            retry_after = res.json()['retry_after']
+            for x in tqdm.tqdm(range(int(retry_after * 10)), desc='Rate limited: Waiting:', position=0,
+                               leave=True):
+                time.sleep(0.1)
+        elif res.status_code == 200:
+            return res
+        else:
+            raise RuntimeError("Got unexpected status code {} with content {}".format(res.status_code, res.json()))
+
+
+def discord_message_query_str(guild_id, query_filters=None, offset=0, is_channel=False):
     if query_filters is None:
         query_filters = []
 
@@ -23,7 +50,7 @@ def discord_message_query(guild_id, query_filters=None, offset=0, is_channel=Fal
     else:
         query_filters[qoffset_filters[0]].offset += offset
 
-    qstr = ('{}/channels/{}/messages/search?{}' if is_channel else '{}/guilds/{}/messages/search?{}')\
+    qstr = ('{}/channels/{}/messages/search?{}' if is_channel else '{}/guilds/{}/messages/search?{}') \
         .format(DISCORD_ENDPOINT, guild_id, "&".join(map(str, query_filters)))
     if len(qoffset_filters) == 0:
         query_filters.pop(-1)
@@ -80,56 +107,56 @@ class DiscordCustomContext:
                       encoding='utf8') as f:
                 f.write(message)
 
-    def query_message(self, guild_id, max_messages=math.inf, query_filters=[], is_channel=False):
+    # You cannot have offset greater than 5000, more than 5000 messages is therefore impossible
+    # without time split
+    def query_message(self, guild_id, max_messages=5000, query_filters=[], is_channel=False):
         total_read = 25
 
-        res = requests.get(discord_message_query(guild_id, query_filters=query_filters, offset=0,
-                                                 is_channel=is_channel),
-                           headers={'Authorization': str(self.token),
-                                    'accept': '*/*',
-                                    'accept-encoding': 'gzip, deflate, br',
-                                    'accept-language': 'en-US',
-                                    'sec-fetch-dest': 'empty',
-                                    'sec-fetch-mode': 'cors',
-                                    'sec-fetch-site': 'same-origin',
-                                    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, '
-                                                  'like Gecko) discord/0.0.309 Chrome/83.0.4103.122 Electron/9.3.5 '
-                                                  'Safari/537.36 ',
-                                    },
-                           )
-        json_buf = json.loads(res.content)
+        res = discord_message_query(self.token, guild_id=guild_id, query_filters=query_filters,
+                                    offset=0, is_channel=is_channel)
+
+        json_buf = res.json()
         max_messages = min(json_buf['total_results'], max_messages)
         pbar = tqdm.tqdm(total=max_messages)
         pbar.set_description("Downloading")
 
         while total_read < max_messages:
             pbar.update(25)
-            res = requests.get(discord_message_query(guild_id, query_filters=query_filters, offset=total_read,
-                                                     is_channel=is_channel),
-                               headers={'Authorization': str(self.token),
-                                        'accept': '*/*',
-                                        'accept-encoding': 'gzip, deflate, br',
-                                        'accept-language': 'en-US',
-                                        'sec-fetch-dest': 'empty',
-                                        'sec-fetch-mode': 'cors',
-                                        'sec-fetch-site': 'same-origin',
-                                        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, '
-                                                      'like Gecko) discord/0.0.309 Chrome/83.0.4103.122 Electron/9.3.5 '
-                                                      'Safari/537.36 ',
-                                        },
-                               )
-            if res.status_code == 429:
-                retry_after = res.json()['retry_after']
-                for x in tqdm.tqdm(range(int(retry_after * 10)), desc='Rate limited: Waiting:', position=0,
-                                   leave=True):
-                    time.sleep(0.1)
-                pbar.unpause()
-                continue
-
-            json_buf['messages'] += json.loads(res.content)['messages']
+            res = discord_message_query(self.token, guild_id=guild_id, query_filters=query_filters,
+                                        offset=total_read, is_channel=is_channel)
+            self.last_res = res
+            json_buf['messages'] += res.json()['messages']
 
             total_read += 25
             time.sleep(0.05)
+
+        return json_buf
+
+    def query_time_split(self, guild_id, max_messages=math.inf, query_filters=[], is_channel=False):
+        total_read = 25
+        res = discord_message_query(self.token, guild_id=guild_id, query_filters=query_filters,
+                                    is_channel=is_channel)
+
+        json_buf = res.json()
+        max_messages = min(json_buf['total_results'], max_messages)
+        time_offset = json_buf['messages'][-1][0]['id']
+
+        pbar = tqdm.tqdm(total=max_messages)
+        pbar.set_description("Downloading")
+
+        pbar.update(25)
+        while total_read < max_messages:
+
+            res = discord_message_query(self.token, guild_id=guild_id,
+                                        query_filters=query_filters+[Query.Before(time_offset)],
+                                        offset=total_read, is_channel=is_channel)
+            self.last_res = res
+            json_buf['messages'] += res.json()['messages']
+
+            time_offset = res.json()['messages'][-1][0]['id']
+            total_read += 25
+            time.sleep(0.05)
+            pbar.update(25)
 
         return json_buf
 
@@ -178,25 +205,38 @@ class DiscordMessage:
     def __init__(self, ctx):
         self.id = ctx['id']
         self.type = ctx['type']
+        self.content = ctx['content']
+        self.channel_id = ctx['channel_id']
+        self.author = AttrDict(ctx['author'])
+        self.attachments = ctx['attachments']
+        self.mentions = ctx['mentions']
+        self.mention_roles = ctx['mention_roles']
+        self.pinned = ctx['pinned']
+        self.mention_everyone = ctx['mention_everyone']
+        self.tts = ctx['tts']
+
         if '.' in ctx['timestamp']:
             self.timestamp = datetime.strptime(ctx['timestamp'], "%Y-%m-%dT%H:%M:%S.%f%z")
         else:
             self.timestamp = datetime.strptime(ctx['timestamp'], "%Y-%m-%dT%H:%M:%S%z")
-        self.timestampEdited = ctx['timestampEdited']
-        self.callEndedTimestamp = ctx['callEndedTimestamp']
-        self.isPinned = ctx['isPinned']
-        self.content = ctx['content']
-
-        self.author = AttrDict(ctx['author'])
-        self.attachments = ctx['attachments']
-        self.reactions = ctx['reactions']
-        self.mentions = ctx['mentions']
+        self.edited_timestamp = ctx['edited_timestamp']
+        self.flags = ctx['flags']
+        self.message_reference = AttrDict(ctx['message_reference'])
+        self.hit = ctx['hit']
 
 
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):
         super(AttrDict, self).__init__(*args, **kwargs)
         self.__dict__ = self
+
+
+def timestamp_to_snowflake(ts) :
+    return ts - 1420070400000 << 22
+
+
+def timestamp_from_snowflake(snowflake):
+    return (snowflake >> 22) + 1420070400000
 
 
 class Query:
@@ -287,3 +327,26 @@ class Query:
         @property
         def query_str(self):
             return 'offset={}'.format(self.offset)
+
+    class Limit:
+        def __init__(self, limit):
+            self.limit = limit
+
+        def __str__(self):
+            return self.query_str
+
+        @property
+        def query_str(self):
+            return 'limit={}'.format(self.limit)
+
+    class During:
+        def __init__(self, before, after):
+            self.before = before
+            self.after = after
+
+        def __str__(self):
+            return self.query_str
+
+        @property
+        def query_str(self):
+            return 'min_id={}&max_id={}'.format(self.after, self.before)
