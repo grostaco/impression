@@ -109,44 +109,46 @@ class DiscordCustomContext:
 
     # You cannot have offset greater than 5000, more than 5000 messages is therefore impossible
     # without time split
-    def query_message(self, guild_id, max_messages=5000, query_filters=[], is_channel=False):
+    def query_message(self, guild_id, limit=5000, query_filters=[], is_channel=False):
         total_read = 25
 
         res = discord_message_query(self.token, guild_id=guild_id, query_filters=query_filters,
                                     offset=0, is_channel=is_channel)
 
         json_buf = res.json()
-        max_messages = min(json_buf['total_results'], max_messages)
-        pbar = tqdm.tqdm(total=max_messages)
+        limit = min(json_buf['total_results'], limit)
+        pbar = tqdm.tqdm(total=limit)
         pbar.set_description("Downloading")
 
-        while total_read < max_messages:
+        while total_read < limit:
             pbar.update(25)
             res = discord_message_query(self.token, guild_id=guild_id, query_filters=query_filters,
                                         offset=total_read, is_channel=is_channel)
             self.last_res = res
+
             json_buf['messages'] += res.json()['messages']
 
             total_read += 25
             time.sleep(0.05)
 
+        pbar.update(limit - pbar.n)
         return json_buf
 
-    def query_time_split(self, guild_id, max_messages=math.inf, query_filters=[], is_channel=False):
+    def query_time_split(self, guild_id, limit=math.inf, query_filters=[], is_channel=False):
         total_read = 25
         res = discord_message_query(self.token, guild_id=guild_id, query_filters=query_filters,
                                     is_channel=is_channel)
 
         json_buf = res.json()
-        max_messages = min(json_buf['total_results'], max_messages)
+
+        limit = min(json_buf['total_results'], limit)
         time_offset = json_buf['messages'][-1][0]['id']
 
-        pbar = tqdm.tqdm(total=max_messages)
+        pbar = tqdm.tqdm(total=limit)
         pbar.set_description("Downloading")
 
-        pbar.update(25)
-        while total_read < max_messages:
-
+        while total_read < limit:
+            pbar.update(25)
             res = discord_message_query(self.token, guild_id=guild_id,
                                         query_filters=query_filters+[Query.Before(time_offset)],
                                         offset=total_read, is_channel=is_channel)
@@ -155,8 +157,8 @@ class DiscordCustomContext:
 
             time_offset = res.json()['messages'][-1][0]['id']
             total_read += 25
-            time.sleep(0.05)
-            pbar.update(25)
+
+        pbar.update(limit - pbar.n)
 
         return json_buf
 
@@ -328,6 +330,7 @@ class Query:
         def query_str(self):
             return 'offset={}'.format(self.offset)
 
+    # not useful in query functions
     class Limit:
         def __init__(self, limit):
             self.limit = limit
