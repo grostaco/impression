@@ -1,12 +1,13 @@
 import json
 import discord
 from discord.ext import commands
-from impression import discord_classifier, ENV
+from impression import discord_classifier
 import time
 
 client = commands.Bot(command_prefix="?")
 model = discord_classifier.load_model("info.json")
-id_lookup = ENV['lookup']
+id_lookup = ['Najim', 'Gary', 'Chicken', 'RoaR']
+
 @client.command()
 async def predict(ctx, *text) :
     embed = discord.Embed(title="Impression results", description="Top 3 candidates", color=0xcb16d4)
@@ -21,5 +22,5 @@ async def predict(ctx, *text) :
     await ctx.send(embed=embed)
 
 def run() :
-    token = ENV["bot_token"]
+    token = json.load(open(".env", encoding="utf8"))["token"]
     client.run(token)
