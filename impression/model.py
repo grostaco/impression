@@ -45,7 +45,7 @@ def export_model(path, train_path='train', test_path='test',
         layers.Dropout(0.2),
         layers.GlobalAveragePooling1D(),
         layers.Dropout(0.2),
-        layers.Dense(4)
+        layers.Dense(len(raw_train_ds.output_classes))
     ])
 
     model.compile(
