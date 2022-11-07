@@ -1,3 +1,6 @@
-from impression.impression_bot import run
+import discord
+import impression
+from matplotlib import pyplot
 
-run()
+dcc = discord.DiscordCustomContext(impression.ENV['token'])
+dcc.query_time_split()
