@@ -7,7 +7,7 @@ from tensorflow.keras.layers.experimental.preprocessing import TextVectorization
 def export_model(path, train_path='train', test_path='test',
                  validation_split=0.2, seed=42,
                  batch_size=32,
-                 max_features=5000, embedding_dim=128, sequence_length=500) :
+                 max_features=5000, embedding_dim=128, sequence_length=500):
 
     raw_train_ds = tf.keras.preprocessing.text_dataset_from_directory(
         train_path, batch_size=batch_size, validation_split=validation_split, subset='training', seed=seed)
@@ -15,7 +15,8 @@ def export_model(path, train_path='train', test_path='test',
     raw_val_ds = tf.keras.preprocessing.text_dataset_from_directory(
         train_path, batch_size=batch_size, validation_split=validation_split, subset='validation', seed=seed)
 
-    raw_test_ds = tf.keras.preprocessing.text_dataset_from_directory(test_path, batch_size=batch_size)
+    raw_test_ds = tf.keras.preprocessing.text_dataset_from_directory(
+        test_path, batch_size=batch_size)
 
     vectorize_layer = TextVectorization(
         max_tokens=max_features,

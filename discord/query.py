@@ -3,43 +3,50 @@ import time
 import tqdm
 from urllib.parse import urljoin
 from .util import tqdm_ratelimit_sleep
+from .query import Query
 from collections import defaultdict
 
-DISCORD_ENDPOINT = "https://discord.com/api/v8/"
+from typing import List, Optional, Dict, Callable, Union
+
+DISCORD_ENDPOINT: str = "https://discord.com/api/v8/"
 
 
-def discord_request(path, headers=None, data=None, sleep_callback=time.sleep):
-    print(path)
+def discord_request(path: str, headers: Optional[Dict[str, str]] = None, data: Optional[str] = None, sleep_callback: Callable[[int], None] = time.sleep):
     while True:
-        r = requests.get(urljoin(DISCORD_ENDPOINT, path), headers=headers, data=data)
+        r = requests.get(urljoin(DISCORD_ENDPOINT, path),
+                         headers=headers, data=data)
         if r.status_code == 429:
             sleep_callback(r.json()['retry_after'])
             continue
         elif r.status_code == 200:
             return r
-        raise ValueError("Unexpected response status code {}\n{}".format(r.status_code, r.reason))
+        raise ValueError("Unexpected response status code {}\n{}".format(
+            r.status_code, r.reason))
 
 
-def discord_message_query(token, guild_id, query_filters=None, offset=0, is_channel=False):
+def discord_message_query(token: str, guild_id: int, query_filters: Optional[List[Query]] = None, offset=0, is_channel=False):
     r = discord_request(
-        discord_message_query_str(guild_id, query_filters=query_filters, offset=offset, is_channel=is_channel),
+        discord_message_query_str(
+            guild_id, query_filters=query_filters, offset=offset, is_channel=is_channel),
         headers={'Authorization': str(token),
-                 'user-agent' : 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) '
-                                'discord/0.0.309 Chrome/83.0.4103.122 Electron/9.3.5 Safari/537.36'
+                 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                 'discord/0.0.309 Chrome/83.0.4103.122 Electron/9.3.5 Safari/537.36'
                  },
         sleep_callback=tqdm_ratelimit_sleep)
     return r
 
 
-def discord_message_query_str(guild_id, query_filters=None, offset=0, is_channel=False):
+def discord_message_query_str(guild_id: str, query_filters: Optional[List[Query]] = None, offset: int = 0, is_channel: bool = False):
     if query_filters is None:
         query_filters = []
 
     query_filters = Query.QueryCollection(query_filters)
 
-    qoffset_filters = tuple(i for i, x in enumerate(query_filters) if isinstance(x, Query.Offset))
+    qoffset_filters = tuple(i for i, x in enumerate(
+        query_filters) if isinstance(x, Query.Offset))
     if len(qoffset_filters) > 1:
-        raise RuntimeError("Expected 1 Query.Offset, got {}".format(len(qoffset_filters)))
+        raise RuntimeError(
+            "Expected 1 Query.Offset, got {}".format(len(qoffset_filters)))
     elif len(qoffset_filters) == 0:
         query_filters &= Query.Offset(offset)
     else:
@@ -101,7 +108,7 @@ class Query:
         def append(self, queries):
             queries = self.queries + list(queries)
             groups = defaultdict(list)
-            for query in queries :
+            for query in queries:
                 groups[query.query_fmt].append(query)
             print(groups)
 
